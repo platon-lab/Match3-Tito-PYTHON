@@ -3,6 +3,7 @@
 title = Tito Match3
 package.name = titomatch3
 package.domain = org.tito
+p4a.branch = v2022.12.20
 
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,mp3,json,ttf
