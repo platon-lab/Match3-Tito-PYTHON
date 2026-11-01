@@ -40,4 +40,13 @@ jobs:
           path: ~/.buildozer
           key: buildozer-${{ hashFiles('buildozer.spec') }}
 
-      - name: Build A
+      - name: Build APK
+        env:
+          ANDROID_ACCEPT_SDK_LICENSE: "1"
+        run: yes | buildozer -v android debug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tito-apk
+          path: bin/*.apk
