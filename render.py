@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Всё, что рисуется: фишки, звёзды, монстры, Тито, Мурзик, текст, фоны."""
 import math
+import random
+import os
 
 import pygame
 
