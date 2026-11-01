@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Экраны: вступление, меню, настройки, дебаг-меню, игра."""
+"""Экраны: вступление (по тапу), меню, настройки, дебаг, игра с автосохранением."""
 import math
 import random
 
@@ -7,8 +7,8 @@ import pygame
 
 from config import (BASE_W, BASE_H, ROWS, COLS, CELL, BX, BY, GEM_R, GEMS, MONSTER_COLORS,
                     SHAPE_NAMES, INTRO_LINES, INTRO_LENGTH, write_save, make_level, goal_text)
-from logic import (Star, Monster, find_matches, has_possible_move, make_board,
-                   swap_cells, gravity_fill, reshuffle_gems, is_gem)
+from logic import (Star, Monster, is_gem, find_matches, has_possible_move, make_board,
+                   swap_cells, gravity_fill, reshuffle_gems)
 from render import (get_font, draw_text, wrap_text, R, P, gradient, make_stars, star_field,
                     glow, draw_gem, draw_piece, draw_tito, draw_bone, draw_chip, chip_width,
                     make_ice_surf, draw_portrait, ease_out, ease_in_out, lerp)
@@ -18,6 +18,30 @@ NAME_TITLES = {"TITO": "Тито", "MUR": "Мурзик", "NAR": "Рассказ
 GROUND = 560
 HOUSES = [(10, 330, 120, (170, 120, 100)), (140, 300, 110, (150, 110, 120)),
           (260, 350, 130, (120, 140, 170)), (400, 320, 130, (180, 140, 110))]
+
+
+def _cell_to_json(v):
+    if v is None:
+        return None
+    if is_gem(v):
+        return ["g", v]
+    if isinstance(v, Star):
+        return ["s"]
+    if isinstance(v, Monster):
+        return ["m", v.species, v.hp]
+    return None
+
+
+def _cell_from_json(x):
+    if x is None:
+        return None
+    if x[0] == "g":
+        return int(x[1])
+    if x[0] == "s":
+        return Star()
+    if x[0] == "m":
+        return Monster(int(x[1]), int(x[2]))
+    return None
 
 
 class Scene:
@@ -61,6 +85,9 @@ class Scene:
         return False
 
     def on_back(self):
+        pass
+
+    def on_quit(self):
         pass
 
 
@@ -143,13 +170,21 @@ class MenuScene(Scene):
         draw_text(s, "ТИТО", get_font(120, True), (255, 200, 60), 270, 120 + bob, "center")
         draw_text(s, "ТРИ В РЯД", get_font(46, True), (110, 230, 255), 270, 192, "center")
         draw_text(s, f"Уровень {self.app.save['level']}", get_font(24), (220, 220, 240), 270, 232, "center")
+        game = self.app.save.get("game")
+        if game:
+            draw_text(s, f"Сохранённая игра: уровень {game['n']}", get_font(20), (255, 220, 140),
+                      270, 262, "center")
         draw_portrait(s, 270, 520 + math.sin(self.t * 3) * 4, 250, self.t,
                       blink=(self.t % 4) < 0.12)
         for b in self.buttons:
             b.draw(s)
 
     def play(self):
-        self.app.play_level(self.app.save["level"])
+        game = self.app.save.get("game")
+        if game and game.get("n") and game["n"] % 100 != 0:
+            self.app.go(lambda: GameScene(self.app, game["n"], restore=game))
+        else:
+            self.app.play_level(self.app.save["level"])
 
     def settings(self):
         self.app.go(lambda: SettingsScene(self.app))
@@ -234,6 +269,7 @@ class DebugScene(Scene):
 
     def play(self):
         self.app.save["level"] = self.n
+        self.app.save["game"] = None
         write_save(self.app.save)
         self.app.play_level(self.n)
 
@@ -257,6 +293,7 @@ class DebugScene(Scene):
     def reset(self):
         self.app.save["level"] = 1
         self.app.save["best"] = 0
+        self.app.save["game"] = None
         write_save(self.app.save)
         self.n = 1
 
@@ -281,31 +318,56 @@ class DebugScene(Scene):
         super().draw(s)
 
 
-# ============================================================ ВСТУПЛЕНИЕ
+# ============================================================ ВСТУПЛЕНИЕ (по тапу)
 class IntroScene(Scene):
-    """Сцена, где всё что говорят — то и происходит: Тито роняет рюкзак."""
+    """Ничего не идёт, пока не нажмёшь. Каждая реплика ждёт тапа.
+    Тап во время движения — перемотка, тап во время текста — показать весь текст."""
 
     def __init__(self, app, on_done):
         super().__init__(app)
         self.on_done = on_done
         self.sky = gradient((90, 160, 235), (210, 235, 255))
         self.rng = random.Random(7)
-        self.tt = 0.0
+        self.phase = "start"      # start -> run -> talk -> run -> ... -> end
+        self.tt = 0.0             # время сцены
+        self.goal = 0.0           # до какого времени сцена идёт
+        self.rate = 1.0
+        self.next_idx = 0         # номер следующей реплики
         self.tito_x = -120.0
         self.dirn = 1
         self.walk = 0.0
         self.torn = False
         self.items = []
         self.shake = 0.0
-        self.line_i = -1
         self.chars = 0.0
         self.typing = False
         self.speaker = "NAR"
         self.text = ""
         self.buttons = [Button(R(372, 24, 144, 46), "Пропустить", self.finish, (60, 60, 90), 22)]
 
+    # ---------- тайминг
+    def _arrive(self):
+        if self.next_idx < len(INTRO_LINES):
+            _, speaker, text = INTRO_LINES[self.next_idx]
+            self.speaker, self.text = speaker, text
+            self.chars = 0.0
+            self.typing = True
+            self.phase = "talk"
+            self.next_idx += 1
+            self.app.audio.play_voice(text)
+        else:
+            self.phase = "end"
+
+    def _advance(self):
+        if self.next_idx < len(INTRO_LINES):
+            self.goal = INTRO_LINES[self.next_idx][0]
+        else:
+            self.goal = INTRO_LENGTH
+        self.phase = "run"
+        self.app.audio.stop_voice()
+
     def _spill(self):
-        """Рюкзак рвётся: гаснут самоцветы и косточка, падают на дорогу."""
+        """Рюкзак рвётся: самоцветы и косточка падают на дорогу."""
         x0 = self.tito_x - 30
         y0 = GROUND - 150
         for v in [self.rng.randrange(len(GEMS)) for _ in range(6)] + ["bone"]:
@@ -331,50 +393,57 @@ class IntroScene(Scene):
                     it["vy"] = -it["vy"] * 0.4
                     it["vx"] *= 0.6
 
-    def update(self, dt):
-        super().update(dt)
-        self.tt += dt
+    def _animate(self, dt):
         tt = self.tt
+        moving = self.phase == "run" and (tt < 6.8 or 10.0 <= tt < 16.0)
         if tt < 6.8:
             self.tito_x = -120 + 57 * tt
-            self.walk += dt * 8
         elif tt < 10.0:
-            self.walk = 0.0
-            if not self.torn and tt >= 7.0:
-                self.torn = True
-                self.shake = 7.0
-                self.app.audio.play("bad")
-                self._spill()
-        elif tt < 16.0:
-            self.dirn = -1
-            self.tito_x = 270 - 70 * (tt - 10.0)
-            self.walk += dt * 8
+            self.tito_x = 267.6
+        else:
+            self.tito_x = 267.6 - 70 * (tt - 10.0)
+        self.dirn = 1 if tt < 10.0 else -1
+        self.walk = self.walk + dt * 8 if moving else 0.0
+        if not self.torn and tt >= 7.0:
+            self.torn = True
+            self.shake = 7.0
+            self.app.audio.play("bad")
+            self._spill()
         if self.shake > 0:
             self.shake = max(0.0, self.shake - dt * 30)
         self._physics(dt)
 
-        nxt = self.line_i + 1
-        while nxt < len(INTRO_LINES) and tt >= INTRO_LINES[nxt][0]:
-            self.line_i = nxt
-            _, self.speaker, self.text = INTRO_LINES[nxt]
-            self.chars = 0.0
-            self.typing = True
-            self.app.audio.play_voice(self.text)
-            nxt += 1
-        if self.typing:
+    # ---------- цикл
+    def update(self, dt):
+        super().update(dt)
+        if self.phase == "run":
+            self.tt = min(self.goal, self.tt + dt * self.rate)
+            if self.tt >= self.goal:
+                self.rate = 1.0
+                self._arrive()
+        if self.phase == "talk" and self.typing:
             self.chars += dt * 42
             if self.chars >= len(self.text):
                 self.chars = len(self.text)
                 self.typing = False
-        if tt >= INTRO_LENGTH:
-            self.finish()
+        self._animate(dt)
 
     def on_down(self, pos):
         if super().on_down(pos):
             return True
-        if self.typing:
-            self.chars = len(self.text)
-            self.typing = False
+        if self.phase == "start":
+            self.phase = "run"
+            self.goal = INTRO_LINES[0][0]
+        elif self.phase == "run":
+            self.rate = 4.0
+        elif self.phase == "talk":
+            if self.typing:
+                self.chars = len(self.text)
+                self.typing = False
+            else:
+                self._advance()
+        elif self.phase == "end":
+            self.finish()
         return True
 
     def on_back(self):
@@ -386,6 +455,7 @@ class IntroScene(Scene):
         if cb:
             cb()
 
+    # ---------- отрисовка
     def draw(self, s):
         s.blit(self.sky, (0, 0))
         s.blit(glow(90, (255, 230, 140)), (460 - 90, 110 - 90))
@@ -412,28 +482,41 @@ class IntroScene(Scene):
             else:
                 draw_gem(s, it["v"], it["x"], it["y"], 12)
         if self.tito_x > -160:
-            sx = random.uniform(-self.shake, self.shake) if self.shake > 0 else 0
-            speaking = self.speaker == "TITO" and self.typing
-            draw_tito(s, self.tito_x + sx, GROUND, 200, self.tt, talk=speaking, walk=self.walk,
+            sx = random.uniform(-self.shake, self.shake) if self.shake > 0 else 0.0
+            draw_tito(s, self.tito_x + sx, GROUND, 200, self.tt,
+                      talk=self.typing and self.speaker == "TITO", walk=self.walk,
                       dirn=self.dirn, bag=True, bag_open=self.torn, sad=self.torn)
+
         box = R(24, 640, 492, 250)
         pygame.draw.rect(s, (12, 10, 28), box, border_radius=22)
         pygame.draw.rect(s, (120, 100, 200), box, 3, border_radius=22)
+        if self.phase == "start":
+            speaker, text = "NAR", "Тито ждёт. Нажми на экран, чтобы начать историю."
+            hint = "Нажми, чтобы начать"
+        else:
+            speaker, text = self.speaker, self.text
+            if self.phase == "run":
+                hint = "Нажми — перемотать"
+            elif self.phase == "talk":
+                hint = "Нажми — показать текст" if self.typing else "Нажми, чтобы продолжить"
+            else:
+                hint = "Нажми, чтобы начать игру"
         tag = R(40, 604, 270, 48)
-        pygame.draw.rect(s, NAME_COLORS[self.speaker], tag, border_radius=14)
-        draw_text(s, NAME_TITLES[self.speaker], get_font(26, True), (20, 20, 30),
+        pygame.draw.rect(s, NAME_COLORS[speaker], tag, border_radius=14)
+        draw_text(s, NAME_TITLES[speaker], get_font(26, True), (20, 20, 30),
                   tag.centerx, tag.centery, "center")
         font = get_font(27)
-        shown = self.text[:int(self.chars)]
+        shown = text if self.phase == "start" else text[:int(self.chars)]
         for i, line in enumerate(wrap_text(shown, font, 440)[:6]):
             draw_text(s, line, font, (245, 245, 255), 50, 668 + i * 36)
+        draw_text(s, hint, get_font(20), (190, 190, 230), 270, 912, "center")
         for b in self.buttons:
             b.draw(s)
 
 
 # ============================================================ ИГРА
 class GameScene(Scene):
-    def __init__(self, app, n):
+    def __init__(self, app, n, restore=None):
         super().__init__(app)
         self.n = n
         self.cfg = make_level(n)
@@ -448,9 +531,12 @@ class GameScene(Scene):
         self.collected = [0] * len(GEMS)
         self.kills = 0
         self.ice = set()
-        self._make_field()
-        self.ice_total = len(self.ice)
-        self.mon_total = self.monsters_alive()
+        if restore is not None:
+            self._restore(restore)
+        else:
+            self._make_field()
+            self.ice_total = len(self.ice)
+            self.mon_total = self.monsters_alive()
 
         self.phase = "idle"
         self.anim_t = 0.0
@@ -474,10 +560,47 @@ class GameScene(Scene):
         self.result_t = 0.0
         self.result_msg = ""
         self.paused = False
-        self.card_t = 2.6
-        self.ice_surf = make_ice_surf()
+        self.card_t = 0.0 if restore is not None else 2.6
         self.pause_btn = Button(R(462, 22, 56, 50), "II", self.pause, (60, 60, 100), 26)
         self.buttons = [self.pause_btn]
+
+    # ---------- сохранение
+    def to_dict(self):
+        return {
+            "n": self.n,
+            "board": [[_cell_to_json(v) for v in row] for row in self.board],
+            "ice": [list(c) for c in self.ice],
+            "ice_total": self.ice_total,
+            "mon_total": self.mon_total,
+            "score": self.score,
+            "collected": list(self.collected),
+            "kills": self.kills,
+            "moves": self.moves,
+            "time_left": self.time_left,
+        }
+
+    def _restore(self, d):
+        self.board = [[_cell_from_json(x) for x in row] for row in d["board"]]
+        self.ice = {tuple(c) for c in d.get("ice", [])}
+        self.ice_total = d.get("ice_total", len(self.ice))
+        self.mon_total = d.get("mon_total", self.monsters_alive())
+        self.score = d.get("score", 0)
+        self.collected = list(d.get("collected", [0] * len(GEMS)))
+        self.kills = d.get("kills", 0)
+        self.moves = d.get("moves")
+        self.time_left = d.get("time_left")
+
+    def autosave(self):
+        if self.phase != "idle" or self.result:
+            return
+        self.app.save["game"] = self.to_dict()
+        write_save(self.app.save)
+
+    def on_quit(self):
+        try:
+            self.autosave()
+        except Exception:
+            pass
 
     # ---------- создание поля
     def _make_field(self):
@@ -534,9 +657,12 @@ class GameScene(Scene):
         self.buttons = [self.pause_btn]
 
     def restart(self):
+        self.app.save["game"] = None
+        write_save(self.app.save)
         self.app.go(lambda: GameScene(self.app, self.n))
 
     def exit_to_menu(self):
+        self.autosave()
         self.app.to_menu()
 
     def next_level(self):
@@ -557,8 +683,9 @@ class GameScene(Scene):
         self.phase = "idle"
         self.selected = None
         self.drag = None
+        save = self.app.save
+        save["game"] = None
         if kind == "won":
-            save = self.app.save
             save["level"] = max(save["level"], self.n + 1)
             save["best"] = max(save.get("best", 0), self.n)
             write_save(save)
@@ -568,6 +695,7 @@ class GameScene(Scene):
                 Button(R(110, 616, 320, 64), "В МЕНЮ", self.exit_to_menu, (150, 90, 220)),
             ]
         else:
+            write_save(save)
             self.app.audio.play("lose")
             self.buttons = [
                 Button(R(110, 540, 320, 64), "ЗАНОВО", self.restart, (70, 150, 240)),
@@ -670,7 +798,7 @@ class GameScene(Scene):
                 self.ice.discard((r, c))
                 self._burst(x, y, (170, 230, 255), 10)
 
-        # монстры: урон, если рядом (или в зоне взрыва) есть совпадение
+        # монстры получают урон, если рядом (или в зоне взрыва) есть совпадение
         for r in range(ROWS):
             for c in range(COLS):
                 m = self.board[r][c]
@@ -692,8 +820,7 @@ class GameScene(Scene):
                     self._burst(x, y, MONSTER_COLORS[m.species], 22)
 
         for (r, c) in cells:
-            v = self.board[r][c]
-            if isinstance(v, Monster):
+            if isinstance(self.board[r][c], Monster):
                 continue
             self.board[r][c] = None
         if keep is not None:
@@ -728,6 +855,7 @@ class GameScene(Scene):
         if not has_possible_move(self.board):
             reshuffle_gems(self.board, self.nc)
             self._text("Перемешали!", BASE_W / 2, BY + 240, (255, 255, 255))
+        self.autosave()
 
     def _update_board(self, dt):
         ph = self.phase
@@ -1029,4 +1157,3 @@ class GameScene(Scene):
         self._draw_result(s)
         for b in self.buttons:
             b.draw(s)
-
