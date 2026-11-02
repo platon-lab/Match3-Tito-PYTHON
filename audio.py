@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Звуки и озвучка. Озвучка скачивается один раз через gTTS (нужен интернет)."""
-import hashlib
+"""Звуки и озвучка.
+Озвучка берётся из папки voice/ проекта (готовые mp3, работают офлайн) или скачивается через gTTS один раз."""
 import math
 import os
 import time
@@ -8,12 +8,16 @@ from array import array
 
 import pygame
 
-from config import VOICE_DIR
+from config import VOICE_DIR, BUNDLED_VOICE_DIR, voice_name
 
 
 def voice_path(text):
-    h = hashlib.md5(text.encode("utf-8")).hexdigest()[:12]
-    return os.path.join(VOICE_DIR, h + ".mp3")
+    """Сначала ищем готовую озвучку в проекте, потом скачанную."""
+    name = voice_name(text)
+    bundled = os.path.join(BUNDLED_VOICE_DIR, name)
+    if os.path.exists(bundled) and os.path.getsize(bundled) > 0:
+        return bundled
+    return os.path.join(VOICE_DIR, name)
 
 
 def voice_worker(texts, status):
@@ -35,10 +39,11 @@ def voice_worker(texts, status):
         if os.path.exists(path) and os.path.getsize(path) > 0:
             status["done"] += 1
             continue
+        target = os.path.join(VOICE_DIR, voice_name(text))
         try:
-            tmp = path + ".tmp"
+            tmp = target + ".tmp"
             gTTS(text=text, lang="ru").save(tmp)
-            os.replace(tmp, path)
+            os.replace(tmp, target)
             status["done"] += 1
             fails = 0
         except Exception:
@@ -81,9 +86,15 @@ class Audio:
                     "fall": _tone(260, 0.08, 0.10),
                     "click": _tone(900, 0.05, 0.15),
                     "bomb": _tone(420, 0.35, 0.3, sweep=-340, decay=1.5),
+                    "boom": _tone(160, 0.25, 0.3, sweep=-80, decay=1.8),
+                    "magnet": _tone(880, 0.18, 0.2, sweep=-300),
+                    "lightning": _tone(1400, 0.16, 0.2, sweep=-900, decay=2),
+                    "defuse": _tone(660, 0.2, 0.2, sweep=500),
+                    "tick": _tone(1200, 0.03, 0.12),
+                    "grow": _tone(220, 0.2, 0.2, sweep=160),
                     "shot": _tone(950, 0.05, 0.12, sweep=-400),
                     "hit": _tone(300, 0.12, 0.25, sweep=-200),
-                    "boom": _tone(160, 0.25, 0.3, sweep=-80, decay=1.8),
+                    "roar": _tone(90, 0.8, 0.35, sweep=-40, decay=1.2),
                     "win": (_tone(523, 0.12, 0.25, decay=0.5) + _tone(659, 0.12, 0.25, decay=0.5)
                             + _tone(784, 0.12, 0.25, decay=0.5) + _tone(1046, 0.35, 0.25, decay=0.8)),
                     "lose": (_tone(392, 0.2, 0.22, decay=1.2) + _tone(330, 0.2, 0.22, decay=1.2)

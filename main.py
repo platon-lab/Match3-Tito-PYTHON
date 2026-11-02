@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Точка входа: окно, переходы между экранами, главный цикл.
+"""Точка входа: окно, переходы между экранами, катсцены, озвучка, главный цикл.
 Если игра падает с ошибкой, текст показывается на экране и пишется в crash.log."""
 import os
 import threading
@@ -7,12 +7,16 @@ import traceback
 
 import pygame
 
-from config import IS_ANDROID, BASE_W, BASE_H, FPS, INTRO_TEXTS, DATA_DIR, load_save, write_save
+from config import IS_ANDROID, BASE_W, BASE_H, FPS, DATA_DIR, load_save, write_save, BOSS_EVERY
 from audio import Audio, voice_worker
 from render import load_portrait, get_font, draw_text, wrap_text
-from scenes import MenuScene, IntroScene
+from story import all_voice_texts, new_mechanics, level_beats, boss_beats
+from config import make_level
+from scenes import IntroScene
+from menu import MenuScene
+from game import GameScene
 from boss import BossScene
-from scenes import GameScene
+from cutscenes import CutsceneScene
 
 BACK_KEYS = (pygame.K_ESCAPE, getattr(pygame, "K_AC_BACK", -999))
 
@@ -33,11 +37,9 @@ class TitoApp:
         self.audio = Audio(self.save)
         load_portrait()
 
-        self.voice_status = {"state": "idle", "done": 0, "total": len(INTRO_TEXTS)}
-        threading.Thread(target=voice_worker, args=(INTRO_TEXTS, self.voice_status),
-                         daemon=True).start()
+        self.voice_status = {"state": "idle", "done": 0, "total": 0}
+        self.start_voice()
 
-        self.tito_taps = 0
         self.running = True
         self.crash_text = None
         self.scale = 1.0
@@ -56,6 +58,15 @@ class TitoApp:
         else:
             self.scene = IntroScene(self, self.intro_finished)
 
+    # ---------- озвучка
+    def start_voice(self):
+        st = self.voice_status
+        if st["state"] == "loading":
+            return
+        texts = all_voice_texts()
+        st.update(state="idle", done=0, total=len(texts))
+        threading.Thread(target=voice_worker, args=(texts, st), daemon=True).start()
+
     # ---------- переходы между экранами
     def go(self, factory):
         if self.pending is None and self.fade_dir == 0:
@@ -71,13 +82,26 @@ class TitoApp:
         self.go(lambda: MenuScene(self))
 
     def play_level(self, n):
-        if n % 100 == 0:
-            self.play_boss(n)
+        """Перед боссом и перед уровнем с новыми механиками, главой или тяжёлым уровнем — катсцена."""
+        if n % BOSS_EVERY == 0:
+            self._cutscene(boss_beats(n), lambda: BossScene(self, n))
+            return
+        cfg = make_level(n)
+        new = new_mechanics(cfg, self.save.get("seen", []))
+        beats = level_beats(cfg, new)
+        factory = lambda: GameScene(self, n)
+        if beats:
+            self._cutscene(beats, factory, mark=new)
         else:
-            self.go(lambda: GameScene(self, n))
+            self.go(factory)
 
-    def play_boss(self, n):
-        self.go(lambda: BossScene(self, n))
+    def _cutscene(self, beats, factory, mark=()):
+        def done():
+            if mark:
+                self.save["seen"] = sorted(set(self.save.get("seen", [])) | set(mark))
+                write_save(self.save)
+            self.go(factory)
+        self.go(lambda: CutsceneScene(self, beats, done))
 
     def _update_fade(self, dt):
         if self.fade_dir == 1:

@@ -8,7 +8,7 @@ p4a.branch = v2022.12.20
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,mp3,json,ttf
 
-version = 2.0
+version = 2.1
 
 requirements = python3,pygame,requests,gtts,click
 
