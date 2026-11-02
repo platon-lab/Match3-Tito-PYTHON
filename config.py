@@ -6,6 +6,9 @@ import os
 import random
 import sys
 
+# True — включить читы (тап 30 раз по Тито в главном меню). Для релиза должно быть False.
+DEBUG_MODE = False
+
 IS_ANDROID = hasattr(sys, "getandroidapilevel") or "ANDROID_ARGUMENT" in os.environ
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("ANDROID_PRIVATE") or HERE
@@ -35,13 +38,25 @@ GEMS = [
 ]
 SHAPE_NAMES = ["Кружки", "Квадраты", "Треугольники", "Ромбы", "Звёзды", "Шестиугольники"]
 SHAPE_GEN = ["кружочков", "квадратов", "треугольников", "ромбов", "звёзд", "шестиугольников"]
-MONSTER_COLORS = [(120, 200, 90), (170, 95, 230), (235, 115, 60), (70, 175, 225)]
+
+# 6 видов монстров: слизь, летучая мышь, призрак, паук, циклоп, огонёк
+MONSTER_COLORS = [
+    (120, 200, 90),
+    (150, 90, 215),
+    (90, 150, 235),
+    (150, 110, 80),
+    (235, 130, 50),
+    (235, 90, 160),
+]
+MONSTER_NAMES = ["Слизняк", "Летучая мышь", "Призрак", "Паук", "Циклоп", "Огонёк"]
+
 DISTRICTS = ["Двор", "Улица", "Парк", "Пляж", "Кухня", "Подвал", "Крыши", "Ярмарка", "Замок", "Логово"]
 HINTS = [
     "Совпадение рядом с монстром бьёт его по голове",
     "Звезда антиматерии взрывает свою строку и столбец",
+    "Бомба взрывает квадрат 3 на 3",
+    "Кирпич выдерживает два удара, лёд — один",
     "Каскады дают больше очков",
-    "Лёд разбивается, когда совпадение проходит по нему",
     "Не торопись с последним монстром",
 ]
 
@@ -66,6 +81,7 @@ DEFAULT_SAVE = {
     "voice": True,
     "inf_moves": False,
     "start_stars": 0,
+    "game": None,
 }
 
 
@@ -107,6 +123,7 @@ def make_level(n):
         "score": int((260 + 70 * math.sqrt(n)) * mult),
         "collect": {},
         "ice": 0,
+        "bricks": 0,
         "monsters": 0,
         "hint": rng.choice(HINTS),
     }
@@ -118,6 +135,8 @@ def make_level(n):
             cfg["collect"][k2] = min(45, int((5 + n // 4) * mult))
     if n >= 3 and rng.random() < 0.5:
         cfg["ice"] = min(30, int((3 + n // 5) * mult))
+        if n >= 8:
+            cfg["bricks"] = cfg["ice"] // 3
     if n > 10:
         cfg["monsters"] = min(12, 1 + (n - 11) // 6 + (1 if hard else 0))
     if n >= 4 and rng.random() < 0.25:
@@ -134,7 +153,7 @@ def goal_text(cfg):
     for k, c in cfg.get("collect", {}).items():
         parts.append(f"собрать {c} {SHAPE_GEN[k]}")
     if cfg.get("ice"):
-        parts.append(f"разбить лёд ({cfg['ice']})")
+        parts.append(f"разбить препятствия ({cfg['ice']})")
     if cfg.get("monsters"):
         parts.append(f"победить монстров ({cfg['monsters']})")
     if cfg.get("moves"):

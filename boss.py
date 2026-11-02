@@ -7,7 +7,7 @@ import pygame
 
 from config import BASE_W, BASE_H, write_save
 from render import (gradient, star_field, make_stars, draw_text, get_font, draw_tito,
-                    draw_mur, draw_bone, draw_heart, R, P, glow)
+                    draw_mur, draw_bone, draw_heart, R, glow)
 from scenes import Scene, Button
 
 TITO_Y = 900      # подошва Тито

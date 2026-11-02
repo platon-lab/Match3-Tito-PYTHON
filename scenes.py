@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Экраны: вступление (по тапу), меню, настройки, дебаг, игра с автосохранением."""
+"""Экраны: вступление (по тапу), меню, настройки, дебаг (только при DEBUG_MODE), игра."""
 import math
 import random
 
 import pygame
 
 from config import (BASE_W, BASE_H, ROWS, COLS, CELL, BX, BY, GEM_R, GEMS, MONSTER_COLORS,
-                    SHAPE_NAMES, INTRO_LINES, INTRO_LENGTH, write_save, make_level, goal_text)
-from logic import (Star, Monster, is_gem, find_matches, has_possible_move, make_board,
+                    SHAPE_NAMES, INTRO_LINES, INTRO_LENGTH, DEBUG_MODE, write_save,
+                    make_level, goal_text)
+from logic import (Star, Bomb, Monster, is_gem, find_matches, has_possible_move, make_board,
                    swap_cells, gravity_fill, reshuffle_gems)
 from render import (get_font, draw_text, wrap_text, R, P, gradient, make_stars, star_field,
                     glow, draw_gem, draw_piece, draw_tito, draw_bone, draw_chip, chip_width,
-                    make_ice_surf, draw_portrait, ease_out, ease_in_out, lerp)
+                    make_obstacle_surfs, draw_portrait, ease_out, ease_in_out, lerp)
 
 NAME_COLORS = {"TITO": (255, 205, 80), "MUR": (200, 150, 255), "NAR": (130, 225, 255)}
 NAME_TITLES = {"TITO": "Тито", "MUR": "Мурзик", "NAR": "Рассказчик"}
@@ -27,6 +28,8 @@ def _cell_to_json(v):
         return ["g", v]
     if isinstance(v, Star):
         return ["s"]
+    if isinstance(v, Bomb):
+        return ["b"]
     if isinstance(v, Monster):
         return ["m", v.species, v.hp]
     return None
@@ -39,6 +42,8 @@ def _cell_from_json(x):
         return int(x[1])
     if x[0] == "s":
         return Star()
+    if x[0] == "b":
+        return Bomb()
     if x[0] == "m":
         return Monster(int(x[1]), int(x[2]))
     return None
@@ -152,7 +157,7 @@ class MenuScene(Scene):
     def on_down(self, pos):
         if super().on_down(pos):
             return True
-        if pygame.Rect(150, 280, 240, 240).collidepoint(pos):
+        if DEBUG_MODE and pygame.Rect(150, 280, 240, 240).collidepoint(pos):
             self.app.tito_taps += 1
             if self.app.tito_taps >= 30:
                 self.app.tito_taps = 0
@@ -242,7 +247,7 @@ class SettingsScene(Scene):
         super().draw(s)
 
 
-# ============================================================ ДЕБАГ-МЕНЮ
+# ============================================================ ДЕБАГ (только при DEBUG_MODE)
 class DebugScene(Scene):
     STAR_VALUES = [0, 1, 2, 3, 5, 8]
 
@@ -523,14 +528,15 @@ class GameScene(Scene):
         self.nc = self.cfg["colors"]
         self.bg = gradient(self.cfg["top"], self.cfg["bottom"])
         self.stars_bg = make_stars(50)
-        self.ice_surf = make_ice_surf()
+        self.obst = make_obstacle_surfs()
         self.infinite = bool(app.save.get("inf_moves"))
         self.moves = self.cfg.get("moves")
         self.time_left = self.cfg.get("time")
         self.score = 0
         self.collected = [0] * len(GEMS)
         self.kills = 0
-        self.ice = set()
+        # препятствия: клетка (r, c) -> [вид, hp]; вид "ice" (1 удар) или "brick" (2 удара)
+        self.ice = {}
         if restore is not None:
             self._restore(restore)
         else:
@@ -547,7 +553,7 @@ class GameScene(Scene):
         self.pop_cells = set()
         self.pop_t = 0.0
         self.pop_dur = 0.22
-        self.blast = None
+        self.blast = None          # ((r, c), "star" | "bomb") во время взрыва
         self.fall_items = []
         self.fall_dur = 0.3
         self.cascade = 0
@@ -569,7 +575,7 @@ class GameScene(Scene):
         return {
             "n": self.n,
             "board": [[_cell_to_json(v) for v in row] for row in self.board],
-            "ice": [list(c) for c in self.ice],
+            "ice": [[r, c, kind, hp] for (r, c), (kind, hp) in self.ice.items()],
             "ice_total": self.ice_total,
             "mon_total": self.mon_total,
             "score": self.score,
@@ -581,7 +587,13 @@ class GameScene(Scene):
 
     def _restore(self, d):
         self.board = [[_cell_from_json(x) for x in row] for row in d["board"]]
-        self.ice = {tuple(c) for c in d.get("ice", [])}
+        self.ice = {}
+        for item in d.get("ice", []):
+            if len(item) >= 4:
+                r, c, kind, hp = item[0], item[1], item[2], item[3]
+            else:  # старые сохранения: только координаты, это лёд
+                r, c, kind, hp = item[0], item[1], "ice", 1
+            self.ice[(int(r), int(c))] = [kind, int(hp)]
         self.ice_total = d.get("ice_total", len(self.ice))
         self.mon_total = d.get("mon_total", self.monsters_alive())
         self.score = d.get("score", 0)
@@ -622,7 +634,12 @@ class GameScene(Scene):
             if has_possible_move(self.board):
                 break
         free = cells[k:]
-        self.ice = set(random.sample(free, min(self.cfg.get("ice", 0), len(free))))
+        n_obst = min(self.cfg.get("ice", 0), len(free))
+        chosen = random.sample(free, n_obst)
+        bricks = min(self.cfg.get("bricks", 0), n_obst)
+        self.ice = {}
+        for i, cell in enumerate(chosen):
+            self.ice[cell] = ["brick", 2] if i < bricks else ["ice", 1]
 
     def monsters_alive(self):
         return sum(1 for row in self.board for v in row if isinstance(v, Monster))
@@ -760,11 +777,17 @@ class GameScene(Scene):
                 self.moves -= 1
         self.selected = None
 
-    def activate_star(self, cell):
-        """Тап по звезде антиматерии: взрыв строки и столбца."""
+    def activate_special(self, cell):
+        """Тап по звезде (взрыв строки и столбца) или бомбе (взрыв 3 на 3)."""
         r, c = cell
-        blast = {(r, i) for i in range(COLS)} | {(i, c) for i in range(ROWS)}
-        self.blast = cell
+        if isinstance(self.board[r][c], Bomb):
+            blast = {(rr, cc) for rr in range(r - 1, r + 2) for cc in range(c - 1, c + 2)
+                     if 0 <= rr < ROWS and 0 <= cc < COLS}
+            kind, sound = "bomb", "boom"
+        else:
+            blast = {(r, i) for i in range(COLS)} | {(i, c) for i in range(ROWS)}
+            kind, sound = "star", "bomb"
+        self.blast = (cell, kind)
         self.pending = blast
         self.pop_cells = blast
         self.pop_t = 0.0
@@ -772,7 +795,7 @@ class GameScene(Scene):
         self.cascade = 0
         self.phase = "pop"
         self.shake = 6.0
-        self.app.audio.play("bomb")
+        self.app.audio.play(sound)
         self.selected = None
         self.drag = None
 
@@ -781,7 +804,11 @@ class GameScene(Scene):
         is_blast = self.blast is not None
         self.blast = None
         gem_cells = [rc for rc in cells if is_gem(self.board[rc[0]][rc[1]])]
-        keep = random.choice(gem_cells) if (not is_blast and len(cells) >= 4 and gem_cells) else None
+        keep_cell = None
+        keep_obj = None
+        if not is_blast and len(cells) >= 4 and gem_cells:
+            keep_cell = random.choice(gem_cells)
+            keep_obj = Bomb() if len(cells) >= 5 else Star()
 
         gain = 0
         for (r, c) in cells:
@@ -794,9 +821,16 @@ class GameScene(Scene):
             elif isinstance(v, Star):
                 gain += 60
                 self._burst(x, y, (200, 160, 255), 16)
+            elif isinstance(v, Bomb):
+                gain += 80
+                self._burst(x, y, (255, 150, 60), 16)
             if (r, c) in self.ice:
-                self.ice.discard((r, c))
-                self._burst(x, y, (170, 230, 255), 10)
+                entry = self.ice[(r, c)]
+                entry[1] -= 1
+                self._burst(x, y, (170, 230, 255) if entry[0] == "ice" else (200, 110, 80), 8)
+                if entry[1] <= 0:
+                    del self.ice[(r, c)]
+                    self._burst(x, y, (170, 230, 255), 10)
 
         # монстры получают урон, если рядом (или в зоне взрыва) есть совпадение
         for r in range(ROWS):
@@ -817,14 +851,14 @@ class GameScene(Scene):
                     self.board[r][c] = None
                     self.kills += 1
                     gain += 60
-                    self._burst(x, y, MONSTER_COLORS[m.species], 22)
+                    self._burst(x, y, MONSTER_COLORS[m.species % len(MONSTER_COLORS)], 22)
 
         for (r, c) in cells:
             if isinstance(self.board[r][c], Monster):
                 continue
             self.board[r][c] = None
-        if keep is not None:
-            self.board[keep[0]][keep[1]] = Star()
+        if keep_cell is not None:
+            self.board[keep_cell[0]][keep_cell[1]] = keep_obj
 
         self.score += gain
         if cells:
@@ -934,8 +968,8 @@ class GameScene(Scene):
         cell = self._cell_at(pos)
         if cell is None:
             return True
-        if isinstance(self.board[cell[0]][cell[1]], Star):
-            self.activate_star(cell)
+        if isinstance(self.board[cell[0]][cell[1]], (Star, Bomb)):
+            self.activate_special(cell)
             return True
         self.drag = (pos, cell)
         return True
@@ -988,6 +1022,12 @@ class GameScene(Scene):
                 pygame.draw.rect(s, (36, 36, 64),
                                  R(bx + c * CELL + 4, by + r * CELL + 4, CELL - 8, CELL - 8),
                                  border_radius=12)
+        # кирпичи — это фон клетки, фишка ложится поверх
+        for (r, c), (kind, hp) in self.ice.items():
+            if kind == "brick":
+                surf = self.obst["brick2"] if hp >= 2 else self.obst["brick1"]
+                s.blit(surf, (int(bx + c * CELL + 4), int(by + r * CELL + 4)))
+
         s.set_clip(R(bx, by, CELL * COLS, CELL * ROWS))
         if self.phase == "fall":
             e = ease_out(self.anim_t)
@@ -1023,17 +1063,27 @@ class GameScene(Scene):
                 draw_piece(s, va, lerp(pb[0], pa[0], e), lerp(pb[1], pa[1], e), GEM_R, self.t)
                 draw_piece(s, vb, lerp(pa[0], pb[0], e), lerp(pa[1], pb[1], e), GEM_R, self.t)
             if self.blast and self.phase == "pop":
-                br, bc = self.blast
-                hgt = int(CELL * 0.9 * (1 - self.pop_t))
-                if hgt > 2:
-                    pygame.draw.rect(s, (235, 220, 255),
-                                     R(bx, by + br * CELL + CELL / 2 - hgt / 2, CELL * COLS, hgt))
-                    pygame.draw.rect(s, (235, 220, 255),
-                                     R(bx + bc * CELL + CELL / 2 - hgt / 2, by, hgt, CELL * ROWS))
+                (br, bc), kind = self.blast
+                if kind == "star":
+                    hgt = int(CELL * 0.9 * (1 - self.pop_t))
+                    if hgt > 2:
+                        pygame.draw.rect(s, (235, 220, 255),
+                                         R(bx, by + br * CELL + CELL / 2 - hgt / 2, CELL * COLS, hgt))
+                        pygame.draw.rect(s, (235, 220, 255),
+                                         R(bx + bc * CELL + CELL / 2 - hgt / 2, by, hgt, CELL * ROWS))
+                else:
+                    inset = 6 + int(20 * self.pop_t)
+                    for rr in range(br - 1, br + 2):
+                        for cc in range(bc - 1, bc + 2):
+                            if 0 <= rr < ROWS and 0 <= cc < COLS:
+                                pygame.draw.rect(s, (255, 170, 60),
+                                                 R(bx + cc * CELL + inset, by + rr * CELL + inset,
+                                                   CELL - 2 * inset, CELL - 2 * inset), border_radius=10)
         s.set_clip(None)
 
-        for (r, c) in self.ice:
-            s.blit(self.ice_surf, (int(bx + c * CELL + 4), int(by + r * CELL + 4)))
+        for (r, c), (kind, hp) in self.ice.items():
+            if kind == "ice":
+                s.blit(self.obst["ice"], (int(bx + c * CELL + 4), int(by + r * CELL + 4)))
         if self.selected and self.phase == "idle":
             r, c = self.selected
             pulse = 2 + int(2 * math.sin(self.t * 8))
@@ -1057,7 +1107,7 @@ class GameScene(Scene):
         for k, n in self.cfg.get("collect", {}).items():
             goals.append((f"{SHAPE_NAMES[k]} {min(self.collected[k], n)}/{n}", GEMS[k][0], k))
         if self.ice_total:
-            goals.append((f"ЛЁД {len(self.ice)}/{self.ice_total}", (150, 220, 255), "ice"))
+            goals.append((f"ПРЕПЯТСТВИЯ {len(self.ice)}/{self.ice_total}", (150, 220, 255), "ice"))
         if self.mon_total:
             goals.append((f"МОНСТРЫ {self.monsters_alive()}/{self.mon_total}", MONSTER_COLORS[0], None))
         return top, goals
@@ -1140,8 +1190,8 @@ class GameScene(Scene):
         self._draw_board(s)
         draw_text(s, "Подсказка: " + self.cfg["hint"], get_font(20), (225, 225, 245),
                   270, BY + CELL * ROWS + 38, "center")
-        draw_text(s, "Свайп или тап — ход. Тап по звезде — взрыв", get_font(18), (180, 180, 210),
-                  270, BY + CELL * ROWS + 70, "center")
+        draw_text(s, "Тап по звезде — взрыв строки, по бомбе — взрыв 3 на 3", get_font(18),
+                  (180, 180, 210), 270, BY + CELL * ROWS + 70, "center")
         for p in self.particles:
             rad = max(1, int(p["size"] * (p["life"] / p["max"])))
             pygame.draw.circle(s, p["color"], (int(p["x"]), int(p["y"])), rad)
