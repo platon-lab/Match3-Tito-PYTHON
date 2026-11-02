@@ -841,8 +841,7 @@ class GameScene(Scene):
             out.append((f"МОНСТРЫ {self.monsters_alive()}/{self.mon_total}", MONSTER_COLORS[0]))
         timers = len(self._timer_positions())
         if timers:
-            out.append((f"БОМБЫ {timers}", (255, 110, 90)))
-        out.append((f"ОСОБЫЕ {self.spec_left}", (255, 190, 255)))
+            out.append((f"ТАЙМЕРЫ {timers}", (255, 110, 90)))
         return out
 
     def _draw_hud(self, s):
@@ -926,7 +925,7 @@ class GameScene(Scene):
         hint_y = BY + CELL * ROWS + 30
         for i, line in enumerate(wrap_text("Подсказка: " + self.cfg["hint"], get_font(19), 440)[:2]):
             draw_text(s, line, get_font(19), (225, 225, 245), 270, hint_y + i * 24, "center")
-        draw_text(s, "Тап по особой фишке — активировать", get_font(18), (180, 180, 210),
+        draw_text(s, "Тап по антиматерии, бомбе, магниту или молнии — сработает", get_font(17), (180, 180, 210),
                   270, 880, "center")
         for p in self.particles:
             rad = max(1, int(p["size"] * (p["life"] / p["max"])))

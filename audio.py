@@ -22,6 +22,11 @@ def voice_path(text):
 
 def voice_worker(texts, status):
     """Фоновая загрузка озвучки. status — словарь, который читает меню настроек."""
+    missing = [t for t in texts if not (os.path.exists(voice_path(t)) and os.path.getsize(voice_path(t)) > 0)]
+    if not missing:
+        status["done"] = len(texts)
+        status["state"] = "done"
+        return
     try:
         from gtts import gTTS
     except Exception:

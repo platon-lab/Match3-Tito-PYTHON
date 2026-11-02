@@ -172,7 +172,7 @@ class SettingsScene(Scene):
         if state == "offline":
             return "Нет интернета: нажми «Перекачать озвучку»"
         if state == "nogtts":
-            return "Нет модуля gTTS: озвучки не будет"
+            return "Не найден gTTS. ПК: pip install gtts. Или положи mp3 в папку voice/"
         return "Нет доступа к папке для озвучки"
 
     def draw(self, s):
