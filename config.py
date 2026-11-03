@@ -18,6 +18,19 @@ SAVE_FILE = os.path.join(DATA_DIR, "tito_save.json")
 PHOTO_FILE = os.path.join(HERE, "tito.jpg")
 VOICE_DIR = os.path.join(DATA_DIR, "tito_voice")        # озвучка, скачанная во время игры
 BUNDLED_VOICE_DIR = os.path.join(HERE, "voice")          # готовые mp3 (см. make_voice.py)
+DEBUG_FILE = os.path.join(HERE, "DEBUG.txt")
+
+
+def debug_enabled():
+    """Читает DEBUG.txt. Если первое слово в файле ON, в главном меню тап по Тито открывает дебаг-меню.
+    Любое другое содержимое (или отсутствие файла) означает, что дебаг выключен."""
+    try:
+        with open(DEBUG_FILE, "r", encoding="utf-8-sig") as f:
+            words = f.read().split()
+    except Exception:
+        return False
+    return bool(words) and words[0].upper() == "ON"
+
 
 BASE_W, BASE_H = 540, 960
 FPS = 60
@@ -25,6 +38,7 @@ ROWS = COLS = 8
 CELL = 60
 BX, BY = 30, 265
 GEM_R = 23
+MAX_LEVEL = 1000
 
 # цвет и форма обычных фишек
 GEMS = [
@@ -77,12 +91,20 @@ MECH_NAMES = {
     "gravity": "гравитация вверх", "fog": "туман", "shuffle": "перемешивание",
 }
 
-# боссы: каждые BOSS_EVERY уровней, по кругу
+# боссы: каждые BOSS_EVERY уровней, всего 20 (до уровня 1000)
 BOSS_EVERY = 50
-BOSS_NAMES = ["Мурзик-гигант", "Слизень-король", "Летучая мышь-барон", "Призрак-граф",
-              "Паук-королева", "Циклоп-колосс"]
-BOSS_COLORS = [(200, 150, 255), (120, 200, 90), (150, 90, 215), (90, 150, 235),
-               (150, 110, 80), (235, 130, 50)]
+BOSS_NAMES = [
+    "Мурзик-гигант", "Слизень-король", "Летучая мышь-барон", "Призрак-граф", "Паук-королева",
+    "Циклоп-колосс", "Мурзик-мститель", "Слизень-герцог", "Мышиный князь", "Тень-невидимка",
+    "Пиявка-царица", "Голубь-громовержец", "Крысиный барон", "Саранча-ведьма", "Ледяной змей",
+    "Огненный кот", "Чёрный ворон", "Механический Мурзик", "Королевский циклоп", "Мурзик-император",
+]
+BOSS_COLORS = [
+    (200, 150, 255), (120, 200, 90), (150, 90, 215), (90, 150, 235), (150, 110, 80),
+    (235, 130, 50), (210, 120, 230), (140, 220, 110), (170, 170, 180), (110, 110, 150),
+    (60, 180, 150), (120, 170, 230), (160, 120, 90), (150, 200, 60), (130, 220, 240),
+    (255, 110, 60), (80, 80, 110), (160, 170, 190), (230, 90, 70), (255, 200, 90),
+]
 
 BG_THEMES = {
     "street": ((90, 160, 235), (210, 235, 255)),
@@ -145,13 +167,13 @@ def voice_name(text):
 def make_level(n):
     """Уровень n всегда одинаковый: случайность берётся из генератора с seed на основе n.
 
-    Механики открываются постепенно. Особых фишек (бомб, антиматерии, магнитов, молний)
-    выдаётся мало: spec_budget на уровень и не больше двух на поле одновременно."""
+    Сложность растёт медленно: механики открываются постепенно, препятствий и монстров немного,
+    а особых фишек выдаётся столько же, сколько раньше (spec_budget, не больше двух на поле)."""
     rng = random.Random(n * 7919 + 17)
     boss = n % BOSS_EVERY == 0
     hard = n % 20 == 0 and not boss
-    mult = 1.5 if hard else 1.0
-    colors = min(6, 4 + (n - 1) // 15)
+    mult = 1.2 if hard else 1.0
+    colors = min(6, 4 + (n - 1) // 25)
     top = (rng.randrange(20, 110), rng.randrange(20, 110), rng.randrange(30, 120))
     cfg = {
         "n": n,
@@ -161,7 +183,7 @@ def make_level(n):
         "name": f"{DISTRICTS[(n - 1) % len(DISTRICTS)]} {n}",
         "top": top,
         "bottom": tuple(c // 3 for c in top),
-        "score": int((260 + 70 * math.sqrt(n)) * mult),
+        "score": int((220 + 60 * math.sqrt(n)) * mult),
         "collect": {},
         "obst": {},
         "monsters": 0,
@@ -180,47 +202,46 @@ def make_level(n):
 
     if n >= 2 and rng.random() < 0.6:
         k = rng.randrange(colors)
-        cfg["collect"][k] = min(45, int((6 + n // 3) * mult))
-        if n >= 30 and rng.random() < 0.4:
+        cfg["collect"][k] = min(30, int((5 + n // 4) * mult))
+        if n >= 30 and rng.random() < 0.3:
             k2 = (k + 1 + rng.randrange(colors - 1)) % colors
-            cfg["collect"][k2] = min(45, int((5 + n // 4) * mult))
+            cfg["collect"][k2] = min(25, int((4 + n // 5) * mult))
 
     obst = cfg["obst"]
-    if n >= 3 and rng.random() < 0.5:
-        obst["ice"] = min(12, int((3 + n // 5) * mult))
-    if n >= 6 and rng.random() < 0.35:
-        obst["web"] = min(10, 2 + n // 10)
-    if n >= 8 and rng.random() < 0.5:
-        obst["brick"] = min(10, 2 + n // 8)
-    if n >= 14 and rng.random() < 0.3:
-        obst["chain"] = min(8, 2 + n // 15)
-    if n >= 16 and rng.random() < 0.25:
-        obst["stone"] = min(6, 2 + n // 20)
-    if n >= 20 and rng.random() < 0.25:
-        obst["slime"] = 1 + min(2, n // 40)
-        cfg["slime_every"] = max(2, 4 - n // 60)
-    while sum(obst.values()) > 22:
+    if n >= 3 and rng.random() < 0.45:
+        obst["ice"] = min(8, int((2 + n // 8) * mult))
+    if n >= 8 and rng.random() < 0.3:
+        obst["web"] = min(6, 2 + n // 15)
+    if n >= 8 and rng.random() < 0.4:
+        obst["brick"] = min(8, 2 + n // 10)
+    if n >= 20 and rng.random() < 0.2:
+        obst["chain"] = min(5, 2 + n // 25)
+    if n >= 30 and rng.random() < 0.2:
+        obst["stone"] = min(4, 2 + n // 30)
+    if n >= 25 and rng.random() < 0.2:
+        obst["slime"] = 1 + min(1, n // 80)
+    while sum(obst.values()) > 14:
         big = max(obst, key=obst.get)
         obst[big] -= 1
         if obst[big] <= 0:
             del obst[big]
 
     if n > 10:
-        cfg["monsters"] = min(12, 1 + (n - 11) // 6 + (1 if hard else 0))
-    if n >= 15 and rng.random() < 0.3:
-        cfg["timers"] = 2 if n >= 40 else 1
-        cfg["timer_len"] = max(4, 9 - n // 30)
-    if n >= 18 and rng.random() < 0.25:
+        cfg["monsters"] = min(5, 1 + (n - 11) // 12)
+    if n >= 25 and rng.random() < 0.15:
+        cfg["timers"] = 1 if n < 60 else 2
+        cfg["timer_len"] = max(6, 10 - n // 40)
+    if n >= 40 and rng.random() < 0.12:
         cfg["gravity"] = True
-    if n >= 25 and rng.random() < 0.2:
+    if n >= 50 and rng.random() < 0.1:
         cfg["fog"] = True
-    if n >= 30 and rng.random() < 0.25:
-        cfg["shuffle_every"] = max(4, 9 - n // 40)
+    if n >= 60 and rng.random() < 0.1:
+        cfg["shuffle_every"] = max(6, 12 - n // 60)
 
-    if n >= 4 and rng.random() < 0.25:
-        cfg["time"] = max(35, int((80 - n // 4) * (0.8 if hard else 1.0)))
+    if n >= 4 and rng.random() < 0.2:
+        cfg["time"] = max(60, int((100 - n // 5) * (0.85 if hard else 1.0)))
     else:
-        cfg["moves"] = max(12, 28 - n // 8) - (5 if hard else 0)
+        cfg["moves"] = max(18, 32 - n // 10) - (3 if hard else 0)
 
     mech = []
     if cfg["collect"]:

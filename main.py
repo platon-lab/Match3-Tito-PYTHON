@@ -41,6 +41,7 @@ class TitoApp:
         self.start_voice()
 
         self.running = True
+        self.debug_play = False     # True, когда уровень запущен из дебаг-меню: прогресс не меняем
         self.crash_text = None
         self.scale = 1.0
         self.ox = self.oy = 0
@@ -79,6 +80,7 @@ class TitoApp:
         self.to_menu()
 
     def to_menu(self):
+        self.debug_play = False
         self.go(lambda: MenuScene(self))
 
     def play_level(self, n):
@@ -97,7 +99,7 @@ class TitoApp:
 
     def _cutscene(self, beats, factory, mark=()):
         def done():
-            if mark:
+            if mark and not self.debug_play:
                 self.save["seen"] = sorted(set(self.save.get("seen", [])) | set(mark))
                 write_save(self.save)
             self.go(factory)

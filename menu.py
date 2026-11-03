@@ -2,11 +2,13 @@
 """Меню: главный экран, выбор уровня, настройки."""
 import math
 
-from config import BOSS_EVERY, write_save
+from config import BOSS_EVERY, write_save, debug_enabled
 from render import R, gradient, make_stars, star_field, draw_text, get_font, draw_portrait
 from ui import Scene, Button, Bokeh, chips_centered
 from game import GameScene
+from debug import DebugScene
 
+TITO_TAP = R(160, 400, 220, 220)   # область тапа по Тито (работает только при ON в DEBUG.txt)
 PER_PAGE = 20
 
 
@@ -16,6 +18,7 @@ class MenuScene(Scene):
         self.bg = gradient((46, 24, 86), (8, 8, 22))
         self.stars = make_stars(60)
         self.bokeh = Bokeh(18)
+        self.debug = debug_enabled()
         game = app.save.get("game")
         if game and game.get("n"):
             primary = Button(R(90, 540, 360, 70), "ПРОДОЛЖИТЬ", self.continue_game, (255, 150, 60))
@@ -41,8 +44,17 @@ class MenuScene(Scene):
                                 (f"Рекорд {save.get('best', 0)}", (150, 220, 255))])
         draw_portrait(s, 270, 510 + math.sin(self.t * 3) * 4, 220, self.t,
                       blink=(self.t % 4) < 0.12)
+        if self.debug:
+            draw_text(s, "DEBUG", get_font(16, True), (255, 120, 220), 12, 12)
         for b in self.buttons:
             b.draw(s)
+
+    def on_down(self, pos):
+        if super().on_down(pos):
+            return True
+        if self.debug and TITO_TAP.collidepoint(pos):
+            self.app.go(lambda: DebugScene(self.app))
+        return True
 
     def continue_game(self):
         game = self.app.save.get("game")

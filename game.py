@@ -206,7 +206,7 @@ class GameScene(Scene):
         self.time_left = d["time_left"]
 
     def autosave(self):
-        if self.phase != "idle" or self.result:
+        if self.phase != "idle" or self.result or self.app.debug_play:
             return
         self.app.save["game"] = self.to_dict()
         write_save(self.app.save)
@@ -260,8 +260,9 @@ class GameScene(Scene):
         self.buttons = [self.pause_btn]
 
     def restart(self):
-        self.app.save["game"] = None
-        write_save(self.app.save)
+        if not self.app.debug_play:
+            self.app.save["game"] = None
+            write_save(self.app.save)
         self.app.go(lambda: GameScene(self.app, self.n))
 
     def exit_to_menu(self):
@@ -287,11 +288,14 @@ class GameScene(Scene):
         self.selected = None
         self.drag = None
         save = self.app.save
-        save["game"] = None
+        dbg = self.app.debug_play
+        if not dbg:
+            save["game"] = None
         if kind == "won":
-            save["level"] = max(save["level"], self.n + 1)
-            save["best"] = max(save.get("best", 0), self.n)
-            write_save(save)
+            if not dbg:
+                save["level"] = max(save["level"], self.n + 1)
+                save["best"] = max(save.get("best", 0), self.n)
+                write_save(save)
             self.app.audio.play("win")
             self.app.audio.play_voice(RESULT_WON)
             self.buttons = [
@@ -299,7 +303,8 @@ class GameScene(Scene):
                 Button(R(110, 616, 320, 64), "В МЕНЮ", self.exit_to_menu, (150, 90, 220)),
             ]
         else:
-            write_save(save)
+            if not dbg:
+                write_save(save)
             self.app.audio.play("lose")
             self.app.audio.play_voice(RESULT_LOST)
             self.buttons = [
